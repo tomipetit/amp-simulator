@@ -1,0 +1,3 @@
+[submodule "Sources/NAMBridge/NeuralAmpModelerCore"]
+	path = Sources/NAMBridge/NeuralAmpModelerCore
+	url = https://github.com/sdatkinson/NeuralAmpModelerCore.git
