@@ -69,6 +69,30 @@ int nam_bridge_has_ir(const NAMBridgeContext* ctx);
 /// or no model is loaded.
 double nam_bridge_model_sample_rate(const NAMBridgeContext* ctx);
 
+/// True if the currently loaded model carries loudness metadata (most .nam
+/// files trained with recent versions of the NAM trainer do; older/manually
+/// built ones may not).
+int nam_bridge_model_has_loudness(const NAMBridgeContext* ctx);
+
+/// The currently loaded model's loudness in dB, as reported by its metadata
+/// (roughly: how loud the model's output is for a "typical" input). Only
+/// meaningful if nam_bridge_model_has_loudness() is true; returns 0 otherwise.
+double nam_bridge_model_loudness_db(const NAMBridgeContext* ctx);
+
+/// Enable/disable automatic output-level normalization: when enabled and the
+/// current model has loudness metadata, an extra makeup gain is applied (on
+/// top of the outputGainDb passed to nam_bridge_process) so that switching
+/// between models of different inherent loudness doesn't also jump the
+/// output volume. Realtime-safe (a single atomic store); safe to call at any
+/// time, including while audio is running.
+void nam_bridge_set_auto_normalize(NAMBridgeContext* ctx, int enabled);
+int nam_bridge_auto_normalize_enabled(const NAMBridgeContext* ctx);
+
+/// The loudness (dB) that auto-normalization levels models to. Defaults to
+/// -18.0 dB. Realtime-safe; safe to call at any time.
+void nam_bridge_set_target_loudness_db(NAMBridgeContext* ctx, float targetLoudnessDb);
+float nam_bridge_target_loudness_db(const NAMBridgeContext* ctx);
+
 #ifdef __cplusplus
 }
 #endif

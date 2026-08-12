@@ -88,4 +88,24 @@ final class NAMEngine {
   var hasModel: Bool { nam_bridge_has_model(ctx) != 0 }
   var hasIR: Bool { nam_bridge_has_ir(ctx) != 0 }
   var modelSampleRate: Double { nam_bridge_model_sample_rate(ctx) }
+
+  /// Whether the currently loaded model carries loudness metadata (most
+  /// recent .nam files do).
+  var modelHasLoudness: Bool { nam_bridge_model_has_loudness(ctx) != 0 }
+  /// The model's reported loudness in dB, meaningful only if modelHasLoudness.
+  var modelLoudnessDb: Double { nam_bridge_model_loudness_db(ctx) }
+
+  /// Realtime-safe; safe to call at any time, including while audio is running.
+  func setAutoNormalize(enabled: Bool) {
+    nam_bridge_set_auto_normalize(ctx, enabled ? 1 : 0)
+  }
+
+  var autoNormalizeEnabled: Bool { nam_bridge_auto_normalize_enabled(ctx) != 0 }
+
+  /// Realtime-safe; safe to call at any time, including while audio is running.
+  func setTargetLoudnessDb(_ value: Float) {
+    nam_bridge_set_target_loudness_db(ctx, value)
+  }
+
+  var targetLoudnessDb: Float { nam_bridge_target_loudness_db(ctx) }
 }

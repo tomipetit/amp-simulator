@@ -1,6 +1,7 @@
 #include "include/nam_bridge.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -38,6 +39,15 @@ struct NAMBridgeContext
   std::vector<float> stageB;
   std::vector<double> inD;
   std::vector<double> outD;
+
+  // Output-level auto-normalization: makeup gain derived from the current
+  // model's loudness metadata (see nam_bridge_load_model), applied on top of
+  // the caller's outputGainDb in nam_bridge_process. All plain atomics so the
+  // audio thread can read them without locking.
+  std::atomic<bool> autoNormalizeEnabled{true};
+  std::atomic<float> targetLoudnessDb{-18.0f};
+  std::atomic<bool> modelHasLoudness{false};
+  std::atomic<double> modelLoudnessDb{0.0};
 };
 
 namespace
@@ -134,7 +144,13 @@ NAMBridgeStatus nam_bridge_load_model(NAMBridgeContext* ctx, const char* namFile
     return NAMBridgeStatusModelLoadFailed;
 
   newModel->Reset(ctx->sampleRate, ctx->maxBlockSize); // also prewarms by default
+
+  const bool hasLoudness = newModel->HasLoudness();
+  const double loudness = hasLoudness ? newModel->GetLoudness() : 0.0;
+
   std::atomic_store(&ctx->model, newModel);
+  ctx->modelHasLoudness.store(hasLoudness, std::memory_order_relaxed);
+  ctx->modelLoudnessDb.store(loudness, std::memory_order_relaxed);
   return NAMBridgeStatusOK;
 }
 
@@ -143,6 +159,8 @@ void nam_bridge_clear_model(NAMBridgeContext* ctx)
   if (!ctx)
     return;
   std::atomic_store(&ctx->model, std::shared_ptr<nam::DSP>());
+  ctx->modelHasLoudness.store(false, std::memory_order_relaxed);
+  ctx->modelLoudnessDb.store(0.0, std::memory_order_relaxed);
 }
 
 NAMBridgeStatus nam_bridge_load_ir(NAMBridgeContext* ctx, const char* wavFilePath)
@@ -201,7 +219,15 @@ void nam_bridge_process(NAMBridgeContext* ctx, const float* input, float* output
     return;
 
   const float inGain = DbToLinear(inputGainDb);
-  const float outGain = DbToLinear(outputGainDb);
+
+  float totalOutputGainDb = outputGainDb;
+  if (ctx->autoNormalizeEnabled.load(std::memory_order_relaxed) && ctx->modelHasLoudness.load(std::memory_order_relaxed))
+  {
+    const float target = ctx->targetLoudnessDb.load(std::memory_order_relaxed);
+    const double loudness = ctx->modelLoudnessDb.load(std::memory_order_relaxed);
+    totalOutputGainDb += static_cast<float>(target - loudness);
+  }
+  const float outGain = DbToLinear(totalOutputGainDb);
 
   if (!ctx->prepared)
   {
@@ -240,4 +266,46 @@ double nam_bridge_model_sample_rate(const NAMBridgeContext* ctx)
     return -1.0;
   auto model = std::atomic_load(&ctx->model);
   return model ? model->GetExpectedSampleRate() : -1.0;
+}
+
+int nam_bridge_model_has_loudness(const NAMBridgeContext* ctx)
+{
+  if (!ctx)
+    return 0;
+  return ctx->modelHasLoudness.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+double nam_bridge_model_loudness_db(const NAMBridgeContext* ctx)
+{
+  if (!ctx)
+    return 0.0;
+  return ctx->modelLoudnessDb.load(std::memory_order_relaxed);
+}
+
+void nam_bridge_set_auto_normalize(NAMBridgeContext* ctx, int enabled)
+{
+  if (!ctx)
+    return;
+  ctx->autoNormalizeEnabled.store(enabled != 0, std::memory_order_relaxed);
+}
+
+int nam_bridge_auto_normalize_enabled(const NAMBridgeContext* ctx)
+{
+  if (!ctx)
+    return 0;
+  return ctx->autoNormalizeEnabled.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+void nam_bridge_set_target_loudness_db(NAMBridgeContext* ctx, float targetLoudnessDb)
+{
+  if (!ctx)
+    return;
+  ctx->targetLoudnessDb.store(targetLoudnessDb, std::memory_order_relaxed);
+}
+
+float nam_bridge_target_loudness_db(const NAMBridgeContext* ctx)
+{
+  if (!ctx)
+    return -18.0f;
+  return ctx->targetLoudnessDb.load(std::memory_order_relaxed);
 }

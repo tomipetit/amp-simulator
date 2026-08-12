@@ -123,6 +123,45 @@ struct ContentView: View {
           GainSlider(label: "入力ゲイン", valueDb: controller.inputGainDb) { controller.setInputGainDb($0) }
           GainSlider(label: "出力ゲイン", valueDb: controller.outputGainDb) { controller.setOutputGainDb($0) }
           LevelMeterView(peak: controller.outputPeakLevel)
+
+          Divider()
+
+          Toggle(
+            "出力レベル自動正規化",
+            isOn: Binding(get: { controller.autoNormalizeEnabled }, set: { controller.setAutoNormalizeEnabled($0) }))
+
+          if controller.autoNormalizeEnabled {
+            GainSlider(
+              label: "ターゲットラウドネス", valueDb: controller.targetLoudnessDb, range: -36...0
+            ) { controller.setTargetLoudnessDb($0) }
+
+            if controller.hasModel {
+              if controller.modelHasLoudness {
+                Text("このモデルのラウドネス: \(String(format: "%.1f", controller.modelLoudnessDb)) dB")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              } else {
+                Text("このモデルにはラウドネス情報がないため、自動正規化は適用されません")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+            }
+          }
+        }
+        .padding(.vertical, 4)
+      }
+
+      GroupBox("EQ (Bass / Mid / Treble)") {
+        VStack(alignment: .leading, spacing: 12) {
+          GainSlider(label: "Bass (120Hz shelf)", valueDb: controller.bassGainDb, range: -15...15) {
+            controller.setBassGainDb($0)
+          }
+          GainSlider(label: "Mid (900Hz peak)", valueDb: controller.midGainDb, range: -15...15) {
+            controller.setMidGainDb($0)
+          }
+          GainSlider(label: "Treble (3.5kHz shelf)", valueDb: controller.trebleGainDb, range: -15...15) {
+            controller.setTrebleGainDb($0)
+          }
         }
         .padding(.vertical, 4)
       }
@@ -152,6 +191,7 @@ struct ContentView: View {
 private struct GainSlider: View {
   let label: String
   let valueDb: Float
+  var range: ClosedRange<Float> = -24...24
   let onChange: (Float) -> Void
 
   var body: some View {
@@ -160,7 +200,7 @@ private struct GainSlider: View {
         .font(.caption)
       Slider(
         value: Binding(get: { valueDb }, set: onChange),
-        in: -24...24,
+        in: range,
         step: 0.5)
     }
   }

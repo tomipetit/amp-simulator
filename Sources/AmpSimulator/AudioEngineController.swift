@@ -41,9 +41,24 @@ final class AudioEngineController: ObservableObject {
   @Published private(set) var outputPeakLevel: Float = 0
   @Published private(set) var currentSampleRate: Double = 0
 
+  // Output-level auto-normalization (see nam_bridge_set_auto_normalize):
+  // levels different models' inherent loudness to a common target using the
+  // model's loudness metadata, when present.
+  @Published var autoNormalizeEnabled: Bool = true
+  @Published var targetLoudnessDb: Float = -18
+  @Published private(set) var modelHasLoudness = false
+  @Published private(set) var modelLoudnessDb: Double = 0
+
+  // 3-band EQ (bass/mid/treble), applied after the cabinet IR stage.
+  @Published var bassGainDb: Float = 0
+  @Published var midGainDb: Float = 0
+  @Published var trebleGainDb: Float = 0
+
   let namEngine = NAMEngine()
 
   private let engine = AVAudioEngine()
+  private let eqNode = AVAudioUnitEQ(numberOfBands: 3)
+  private var eqAttached = false
   private let ringBuffer = FloatRingBuffer(capacity: 8192)
   private var sourceNode: AVAudioSourceNode?
   private var meterTimer: Timer?
@@ -76,6 +91,28 @@ final class AudioEngineController: ObservableObject {
     inputScratch.initialize(repeating: 0, count: scratchCapacity)
     outputScratch.initialize(repeating: 0, count: scratchCapacity)
     downmixScratch.initialize(repeating: 0, count: scratchCapacity)
+
+    // Bass (low shelf) / Mid (parametric peak) / Treble (high shelf), a
+    // simple 3-band tone-shaping EQ. Frequencies chosen for guitar amp tone
+    // stacks; gains default to flat (0 dB) and are set via the UI.
+    let bass = eqNode.bands[0]
+    bass.filterType = .lowShelf
+    bass.frequency = 120
+    bass.gain = 0
+    bass.bypass = false
+
+    let mid = eqNode.bands[1]
+    mid.filterType = .parametric
+    mid.frequency = 900
+    mid.bandwidth = 1.5
+    mid.gain = 0
+    mid.bypass = false
+
+    let treble = eqNode.bands[2]
+    treble.filterType = .highShelf
+    treble.frequency = 3500
+    treble.gain = 0
+    treble.bypass = false
   }
 
   deinit {
@@ -181,7 +218,11 @@ final class AudioEngineController: ObservableObject {
 
     sourceNode = node
     engine.attach(node)
-    engine.connect(node, to: engine.mainMixerNode, format: monoFormat)
+    engine.attach(eqNode)
+    eqAttached = true
+    // NAM source --> 3-band EQ --> main mixer --> output device.
+    engine.connect(node, to: eqNode, format: monoFormat)
+    engine.connect(eqNode, to: engine.mainMixerNode, format: nil)
     engine.connect(engine.mainMixerNode, to: output, format: nil)
 
     engine.prepare()
@@ -193,6 +234,9 @@ final class AudioEngineController: ObservableObject {
       engine.disconnectNodeOutput(node)
       engine.detach(node)
       sourceNode = nil
+      engine.disconnectNodeOutput(eqNode)
+      engine.detach(eqNode)
+      eqAttached = false
       return
     }
 
@@ -216,6 +260,11 @@ final class AudioEngineController: ObservableObject {
       engine.detach(node)
     }
     sourceNode = nil
+    if eqAttached {
+      engine.disconnectNodeOutput(eqNode)
+      engine.detach(eqNode)
+      eqAttached = false
+    }
     isRunning = false
     outputPeakLevel = 0
   }
@@ -230,11 +279,38 @@ final class AudioEngineController: ObservableObject {
     outputGainSnapshot = value
   }
 
+  func setAutoNormalizeEnabled(_ enabled: Bool) {
+    autoNormalizeEnabled = enabled
+    namEngine.setAutoNormalize(enabled: enabled)
+  }
+
+  func setTargetLoudnessDb(_ value: Float) {
+    targetLoudnessDb = value
+    namEngine.setTargetLoudnessDb(value)
+  }
+
+  func setBassGainDb(_ value: Float) {
+    bassGainDb = value
+    eqNode.bands[0].gain = value
+  }
+
+  func setMidGainDb(_ value: Float) {
+    midGainDb = value
+    eqNode.bands[1].gain = value
+  }
+
+  func setTrebleGainDb(_ value: Float) {
+    trebleGainDb = value
+    eqNode.bands[2].gain = value
+  }
+
   func loadModel(url: URL) {
     do {
       try namEngine.loadModel(at: url)
       hasModel = true
       modelSampleRate = namEngine.modelSampleRate
+      modelHasLoudness = namEngine.modelHasLoudness
+      modelLoudnessDb = namEngine.modelLoudnessDb
       lastErrorMessage = nil
     } catch {
       lastErrorMessage = error.localizedDescription
@@ -245,6 +321,8 @@ final class AudioEngineController: ObservableObject {
     namEngine.clearModel()
     hasModel = false
     modelSampleRate = -1
+    modelHasLoudness = false
+    modelLoudnessDb = 0
   }
 
   func loadIR(url: URL) {
